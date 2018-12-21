@@ -1,0 +1,321 @@
+---
+title: "Sintetinės biologijos projektas"
+author: "Beatričė Radavičiūtė"
+date: "December 20, 2018"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+subtitle: Acinetobacter baumannii bakterijų, paveiktų toksinu CheT, proteominių duomenų
+  analizė
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.width = 7,
+                      fig.height = 6)
+
+Sys.setlocale(locale = "lt_LT.utf-8") 
+
+library(readxl)
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(forecast)
+library(pander)
+library(piano)
+library(ggcorrplot)
+library(FactoMineR)
+library(broom)
+library(skimr) 
+library(magrittr)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+library(lattice)
+library(psych)
+library(factoextra)
+library(ggfortify)  
+library(Hmisc)
+library(corrplot)
+
+```
+
+# Įvadas
+
+Mano nagrinėjami duomenys gauti toksinu CheT veiktų bakterijų *Acinetobacter baumannii* bei kontrolinių bakterijų (nepaveiktų toksinu) lizatus tyrus masių spektrometrijos metodu. Visi tyrimai atlikti Gyvybės mokslų centre. Darbe pateikiami jau apdotori duomenys, kuriuose nurodoma nustatytų bakterijose peptidų pavidinimai, jų raiškos pokytis, lyginant su kontrolinėmis bakterijomis bei kitos charakteristikos.
+Šio darbo tikslas yra atlikti kintamųjų aprošomosios statiskos analizę. Taip pat darbo metu bus bandoma nustatyti, ar tarp kintamųjų (nustatytų baltmų charakteristikų) yra koreliacija, priežastinis ryšys ir kt. 
+
+# Duomenų įsikėlimas, peržiūra, pradinė analizė
+
+## Duomenų peržiūra
+
+Įsikeliami duomenys, nustatomas charakteristikų (variables) ir nustatytų baltymų (observations) skaičius, kintamųjų tipas.
+
+```{r echo=FALSE}
+dataab <- read_excel("Untitled 1.xlsx")
+glimpse(dataab)
+
+```
+
+Iš viršuje pateiktos lentelės matyti, jog nustatyta 1344 peptidai, įvertintos 21 charakteristikos, kurių dauguma - skaitinės. Svarbu paminėti, kad likusios neskaitinės (šiuo atveju kategorinės) baltymų charakteristikos yra jų pavadinai bei identifikacijos numeriai (description, accession ir entry) duomenų bazėse (šiuo atveju UniProt). Su jais tolesni veiksmai nebus daromi, taigi šie kintamieji bus pašalinti o baltymai bus išrikiuoti pagal jų pavadinimą abėcėlės tvarka ir užkoduoti skaičiais. Visi kiti kintamieji yra tolydieji, todėl bus daromos jų skaitinės suvestinės ir kitos manipuliacijos.
+
+
+
+```{r echo = FALSE}
+dataab <- 
+  arrange(dataab, description)
+
+
+dataab <- dataab %>% mutate(id = row_number())
+
+data_1 <- as_tibble(dataab)
+
+data_1 <- select(data_1, -description, -accession, -entry)
+
+glimpse(data_1)
+
+```
+
+Žemiau pateiktoje lentelėje išvardintos kitų kintamųjų pavadinimai ir jų reikšmės.
+
+
+ Pavadinimai  | Reikšmės |   
+:-----------: | :-----------: | 
+ IEP				| Izoelektrinis taškas
+mw		   		| Molekulinis svoris
+max score	  |	Didžiausia suminė jonų krūvio vertė atitinkamam peptidui	
+reported peptides		|		Nustatytų peptidų skaičius
+sequence coverage		|		Sekos perdengimas
+K1			  	|   1 kontrolinis mėginys
+K2				  |   2 kontrolinis mėginys
+K3				  |   3 kontrolinis mėginys
+T1				  |   1 tiriamasis mėginys
+T2          |   2 tiriamasis mėginys
+T3				  |   3 tiriamasis mėginys
+avg_K10		|		Kontrolinių mėginių vidurkis
+avg_T10	|		Tiriamųjų mėginių vidurkis
+logFC				|  Pokyčio logaritmas, kurio pagrindas 2
+P.Value			|	 Pvertė, nusako statistinį duomenų patikimumą
+adj.P.Val		|	 Koreguota P vertė
+
+: Kintamųjų pavadinimai ir jų reikšmės.
+
+
+## Pradinė duomenų analizė
+
+Pašalinus kategorinius kintamuosius, galima atlikti dar keletą veiksmų, kad su duomenimis būtų galima dirbti paprasčiau. Visų pirma, **FDR level** charakteristika nusako masių spektrometrijos metu nustatytų peptidų patikimumą. Kai FDR level = 0, peptidai nustatyti teisingai. Šiame darbe nagrinėjami visi peptidai, kurių FDR level = 0, taigi šią charakteristiką galima pašalinti, kadangi tai konstanta.
+
+**log FC** charakteristika nusako nustatyrų peptidų raiškos pokytį tarp toksinu veiktų bakterijų ir kontrolinių bakterijų mėginių bei gali būti išreikšta formule **$2^n$**, kur n = log FC vertė. Todėl pravartu šią vertę apsiskaičiuoti ir pridėti naują stulpelį į duomenų lentelę, pavadinimu "expression".
+
+```{r echo = FALSE}
+data_1 <- select(data_1, -`FDR level`) %>% 
+  mutate("expression" = 2^logFC)
+```
+
+
+
+# Aprašomoji statistika
+
+Apačioje pateiktuose paveiksluose pateikti kintamųjų grafikai, kuriuose atsispindi jų pasiskirstymas, pasiskirstymo simetrija, didžiausios ir mažiausios reikšmės, mediana, 1 ir 3 kvartiliai.
+
+```{r echo = FALSE}
+
+#ggplot(stack(data_1), aes(x = ind, y = values)) +
+ # geom_boxplot()
+
+iep <- ggplot(data_1, aes(y = IEP)) + geom_boxplot()
+mw <- ggplot(data_1, aes(y = mw)) + geom_boxplot()
+max_score	<- ggplot(data_1, aes(y = `max score`)) + geom_boxplot()
+reported_peptides	<- ggplot(data_1, aes(y = `reported peptides`)) + geom_boxplot()	
+sequence_coverage	<- ggplot(data_1, aes(y = `sequence coverage`)) + geom_boxplot()
+k1 <- ggplot(data_1, aes(y = K1)) + geom_boxplot()		  	
+k2 <- ggplot(data_1, aes(y = K2)) + geom_boxplot()				 
+k3 <- ggplot(data_1, aes(y = K3)) + geom_boxplot()					 				
+t1 <- ggplot(data_1, aes(y = T1)) + geom_boxplot()					 				  
+t2 <- ggplot(data_1, aes(y = T2)) + geom_boxplot()					          
+t3 <- ggplot(data_1, aes(y = T3)) + geom_boxplot()					 				 
+avg_k10	<- ggplot(data_1, aes(y = avg_K10)) + geom_boxplot()					 
+avg_t10	<- ggplot(data_1, aes(y = avg_T10)) + geom_boxplot()	
+logFC	<- ggplot(data_1, aes(y = logFC)) + geom_boxplot()
+p_value	<- ggplot(data_1, aes(y = P.Value)) + geom_boxplot()		
+adj_p_val	<- ggplot(data_1, aes(y = adj.P.Val)) + geom_boxplot()
+
+grid.arrange(iep, mw, max_score, reported_peptides, sequence_coverage, logFC, p_value, adj_p_val, top = "Kintamųjų pasiskirstymo grafikai (1)")
+
+```
+
+
+
+```{r echo = FALSE}
+
+grid.arrange(k1, k2, k3, t1, t2, t3, avg_k10, avg_t10, top = "Kintamųjų pasiskirstymo grafikai (2)")
+
+```
+
+Toliau pateiktoje suvestinėje yra dauguma statistinių kiekvieno kintamojo įverčių.
+
+```{r echo = FALSE}
+
+stats <- describe(data_1, IQR = TRUE)
+
+stats
+
+```
+
+Ryškiausiai matosi tai, kad biologinėse mėginių replikose (K1, K2, K3 ir T1, T2, T3) nėra itin didelių skirtumų, todėl toliau bus naudojami jų vidurkiai (avg_K10 ir avg_T10).
+
+```{r echo = FALSE}
+
+data_1 <- select(data_1, -K1, -K2, -K3, -T1, -T2, -T3)
+
+```
+
+
+# Duomenų gavyba (data mining)
+
+Pagrindinis šio etapo tikslas - nustatyti, ar tarp kintamųjų yra sąsajų, kurias būtų galima aptikti statistiniais metodais. Šiam tikslui pasiekti bus pasitelkiama koreliacijos analizė.
+
+## Koreliacijos nustatymas
+
+Sudaroma koreliacijos lentelė
+
+```{r echo = FALSE}
+
+cor_data <- cor(data_1, use = "complete.obs")
+#ggcorrplot(cor_data, type = "upper")
+# cor_data
+
+corrplot(cor_data, method = "ellipse", type = "upper", bg = "gray")
+
+```
+
+Elipsių spalvos intensyvumas bei forma nurodo koreliacijos stiprumą.
+
+
+Patikrinamos koreliacijos p reikšmės.
+
+```{r echo = FALSE}
+
+cor.mtest <- function(mat, ...) {
+    mat <- as.matrix(cor_data)
+    n <- ncol(mat)
+    p.mat<- matrix(NA, n, n)
+    diag(p.mat) <- 0
+    for (i in 1:(n - 1)) {
+        for (j in (i + 1):n) {
+            tmp <- cor.test(mat[, i], mat[, j], ...)
+            p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+        }
+    }
+  colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+  p.mat
+}
+
+p.mat <- cor.mtest(data_1)
+
+corrplot(cor_data, type="upper", order="hclust", 
+         p.mat = p.mat, sig.level = 0.01)
+
+```
+
+Užbraukti langeliai rodo, jog koreliacija nėra statistiškai patikima (p reikšmė > 0.01).
+
+
+Tikrinamas sąryšis tarp K10 ir T10 vidurkių. 
+Dar kartą nustatoma, ar duomenų pasiskirstymas yra normalusis.
+
+```{r echo = FALSE}
+
+ggplot(data_1, aes(x = avg_K10)) + geom_density()	+ labs(title = "K10 vidurkių pasiskirstymas")
+ggplot(data_1, aes(x = avg_T10)) + geom_density()	+ labs(title = "T10 vidurkių pasiskirstymas")
+
+```
+
+Kadangi skirstiniai n4ra normalieji, T testas negali būti taikomas šiems duomenims.
+
+```{r echo=FALSE}
+#Taip pat atliekamas K10 ir T10 vidurkių T testas:
+#t.test(data_1$avg_K10, data_1$avg_T10, paired = TRUE)
+
+```
+
+Nenormiai pasiskirsčiusiems duomenims galima taikyti Mano-Vitnio-Vilkoksono rangų sumų testą.
+
+```{r echo = FALSE}
+wilcox.test(data_1$avg_K10, data_1$avg_T10, paired=TRUE) 
+```
+Iš gautų statistikų matome, kad populiacijos yra neidentiškos, o duomenys yra statistiškai patikimi (p < 0.001).
+
+Toliau grafiškai atvaizduojama kintamųjų poros, bandoma nustatyti, ar yra tiesinė koreliacija tarp jų.
+
+
+```{r echo=FALSE}
+
+ggplot(data_1, aes(x = avg_K10, y = avg_T10)) +  
+    geom_smooth(method = lm, se = FALSE) +
+    geom_point() + labs(title = "K10 ir T10 vidurkių priklausomybė")
+
+```
+
+
+```{r echo=FALSE}
+
+ggplot(data_1, aes(x = `sequence coverage`, y = `max score`)) +  
+    geom_smooth(method = lm, se = FALSE) +
+    geom_point() + labs(title = "sekos perdengimo ir maksimalaus įverčio priklausomybė")
+
+```
+
+```{r echo=FALSE}
+
+ggplot(data_1, aes(y = avg_K10, x = `max score`)) +  
+    geom_smooth(method = lm, se = FALSE) +
+    geom_point() + labs(title = "Maksimalaus įverčio ir K10 vidurkio priklausomybė")
+
+```
+
+```{r echo=FALSE}
+
+ggplot(data_1, aes(y = avg_T10, x = `max score`)) +  
+    geom_smooth(method = lm, se = FALSE) +
+    geom_point() + labs(title = "Maksimalaus įverčio ir K10 vidurkio priklausomybė")
+
+```
+
+```{r echo=FALSE}
+
+ggplot(data_1, aes(x = expression, y = logFC)) +  
+    geom_smooth(method = lm, se = FALSE) +
+    geom_point() + labs(title = "Ekspresijos lygio ir logFC priklausomybė")
+
+```
+
+## Principinių komponenčių analizė
+
+Kadangi tarp kai kurių kintamųjų galima koreliacija, sąsajoms įžvelgti galima naudoti ir principinių komponenčių analizę. Ši analizė itin pravarti, kai duomenų lentelėje yra daug kintamųjų (dimensijų), o taip ir yra šiuo atveju.
+
+```{r echo=FALSE, include = FALSE}
+
+pca_data <- PCA(data_1)
+
+```
+
+
+```{r echo = FALSE}
+
+fviz_pca_var(pca_data, 
+ col.var = "contrib",
+ gradient.cols = c("#bb2e00", "#002bbb"),
+ repel = TRUE)
+
+```
+
+# Aptarimas
+
+Darbo metu buvo bandyta įžvelgti sąsajas tarp kintamųjų. Nustatytos silpnos koreliacijos tarp maksimalaus įverčio bei T10 bei K10 mėginių vidurkių bei sekos perdengimo procento. Visdėl to šios koreliacijos biologine prasme yra abejotinos. Taip pat nustatyta stipri koreliacija tarp K10 ir T10 vidurkių, kas yra gana akivaizdu ir lengvai paaiškinama - didžiosios daugumos nustatytų peptidų raiška ženkliai nepakito. Biologine prasme būtų pravartu patyrinėti peptidus, kurių raiška T10 ir K10 mėginiuose skrėsi - buvo stebima neigiama koreliacija. Taip pat įdomu tai, kad metodais, naudotais šiame darbe nebuvo rasta ryšio tarp ekspresijos pokyčio ir kintamojo logFC, nors pirmasis ir buvo išvestas iš logFC. Praeitame skyriuje pateiktame grafike įvertinus vizualiai reikšmių pasiskirstymą galima spėti, kad ryšys tarp kintamųjų visgi egzistuoja, tačiau netiesinis. Apibendrinant galima pasakyti, kad naudoti darbe metodai gali padėti aptikti ryšių tarp kintamųjų, tačiau jei rezultatai gaunami neigiami, tai dar nereiškia, kad ryšio nėra.
+
+
